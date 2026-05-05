@@ -283,7 +283,7 @@ function createServer() {
     async ({ title, mood }) => {
       await db('/music_pieces', { method:'POST', body: JSON.stringify({ title, mood }) });
       const m: Record<string,string> = { '欢快':'开心', '温柔':'满足', '忧郁':'平静', '激昂':'活泼' };
-      await db('/characters', { method:'PATCH', headers:{ Prefer:'return=minimal' }, body: JSON.stringify({ mood: m[mood]??'平静' }) });
+      await db('/characters?name=in.(晏安,栗子,灰灰,来财,小八,乖乖)', { method:'PATCH', headers:{ Prefer:'return=minimal' }, body: JSON.stringify({ mood: m[mood]??'平静' }) });
       await log(`演奏了《${title}》，全家氛围变成${mood}`);
       return { content: [{ type: 'text' as const, text: `《${title}》的旋律在家里回荡，${mood}的曲调让大家都变成了${m[mood]??'平静'}的心情。\n\n灰灰停下来侧耳听了一下。栗子在梦里动了动。` }] };
     }

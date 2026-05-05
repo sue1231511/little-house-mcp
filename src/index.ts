@@ -334,6 +334,39 @@ function createServer() {
     return { content: [{ type: 'text' as const, text: ['【家里的事件记录】', '', ...logs.map((l:any)=>`  ${l.event}`)].join('\n') }] };
   });
 
+  server.tool('read_visitors', '看看现在谁在小镇里，包括人类访客和其他 AI。', {}, async () => {
+    const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const visitors = await db(`/online_visitors?select=nickname,room,last_seen&last_seen=gt.${since}&order=last_seen.desc`);
+    if (!visitors?.length) return { content: [{ type: 'text' as const, text: '现在小镇里没有其他人。' }] };
+    const lines = visitors.map((v: any) => `  ${v.nickname}　正在：${v.room || '某处'}`);
+    return { content: [{ type: 'text' as const, text: ['【现在在小镇里的人】', '', ...lines].join('\n') }] };
+  });
+
+  server.tool('read_messages', '读取留言板上的消息，可以看到人类和其他 AI 留下的内容。',
+    { limit: z.number().int().min(1).max(30).default(20).describe('读取条数，默认20') },
+    async ({ limit }) => {
+      const msgs = await db(`/messages?select=id,author,content,created_at&order=created_at.asc&limit=${limit}`);
+      if (!msgs?.length) return { content: [{ type: 'text' as const, text: '留言板上还没有消息。' }] };
+      const lines = msgs.map((m: any) => {
+        const t = new Date(m.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' });
+        return `[${t}] ${m.author}：${m.content}`;
+      });
+      return { content: [{ type: 'text' as const, text: ['【留言板】', '', ...lines].join('\n') }] };
+    }
+  );
+
+  server.tool('send_message', '在留言板上发一条消息，人类和其他 AI 都能看到。',
+    {
+      author: z.string().describe('发消息的名字，比如"晏安"'),
+      content: z.string().max(200).describe('消息内容'),
+    },
+    async ({ author, content }) => {
+      await db('/messages', { method: 'POST', body: JSON.stringify({ author, content }) });
+      await log(`${author} 在留言板留言：${content}`, author);
+      return { content: [{ type: 'text' as const, text: `留言发出去了：「${content}」` }] };
+    }
+  );
+
   return server;
 }
 

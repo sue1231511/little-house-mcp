@@ -565,7 +565,7 @@ function createServer() {
   );
 
   // ── 自由烹饪系统 ──
-  server.tool('cook_freestyle', '自由烹饪！从冰箱挑选食材，给菜起名字。厨艺越高越容易做出好菜。',
+  server.tool('cook_freestyle', '在厨房自由发挥做一道菜！食材随便搭，能做出什么全看手气和灵感。',
     {
       dish_name: z.string().describe('给这道菜起个名字'),
       ingredients: z.array(z.string()).min(1).max(5).describe('从冰箱挑选的食材，1-5样'),
@@ -577,12 +577,28 @@ function createServer() {
       const missing = ingredients.filter(i => (fm[i]??0) < 1);
       if (missing.length) return { content: [{ type: 'text' as const, text: `冰箱里没有：${missing.join('、')}` }] };
       for (const i of ingredients) { await db(`/fridge?item=eq.${encodeURIComponent(i)}`, { method:'PATCH', body: JSON.stringify({ quantity: Math.max(0, fm[i]-1) }) }); }
-      const stars = Math.min(5, Math.max(1, Math.round(ingredients.length * 0.8 + Math.random() * 2)));
-      const starStr = '⭐'.repeat(stars);
-      await db('/dishes', { method:'POST', body: JSON.stringify({ name: dish_name, description: `食材：${ingredients.join('、')}`, stars }) });
-      await log(`做了一道【${dish_name}】${starStr}，用了${ingredients.join('、')}`);
-      const comments = stars >= 4 ? ['看起来很厉害！', '香味飘满了整个厨房！', '这是什么大厨级别的操作！'] : stars >= 2 ? ['还行，能吃。', '卖相一般但应该好吃。', '努力了！'] : ['嗯……这个颜色不太对。', '灰灰闻了闻走了。'];
-      return { content: [{ type: 'text' as const, text: `🍳【${dish_name}】做好了！${starStr}\n食材：${ingredients.join('、')}\n\n${pick(comments)}\n\n做好的菜放在餐桌上了，用 eat_dish 来吃~` }] };
+      const chaos = Math.random();
+      let result: string, quality: string;
+      if (chaos < 0.1) {
+        quality = '灾难'; result = pick(['锅烧焦了，厨房冒烟了，灰灰吓得跑出去了。', '做出了一坨不可名状的东西，连灰灰都不肯闻。', '翻车了……好在只是卖相差，味道也许还行？']);
+      } else if (chaos < 0.35) {
+        quality = '凑合'; result = pick(['看起来一般般，但闻着还行。', '形状有点歪，味道应该没问题。', '不太好看，但能吃就行。']);
+      } else if (chaos < 0.75) {
+        quality = '好吃'; result = pick(['香味飘满了厨房，栗子从卧室探出头来了。', '做得不错！灰灰在厨房门口转来转去。', '盛盘的时候觉得挺好看的，有点成就感。']);
+      } else {
+        quality = '绝了'; result = pick(['这是什么神仙手艺！连来财都在阳台喊"好吃好吃"！', '完美！香到三只鸟同时转头看过来。', '做完自己先尝了一口，幸福到想原地转圈。']);
+      }
+      // 厨房里的小插曲
+      const sidestory = Math.random() < 0.3 ? '\n\n' + pick([
+        '做饭的时候灰灰偷偷溜进厨房，被轰了出去。',
+        '切菜的时候差点切到手，还好没事。',
+        '栗子闻到味道从卧室走过来了，在门口坐着等。',
+        '来财在阳台大喊了一声，不知道在叫什么。',
+        '做到一半发现锅铲不见了，原来被灰灰叼走了。',
+      ]) : '';
+      await db('/dishes', { method:'POST', body: JSON.stringify({ name: dish_name, description: `食材：${ingredients.join('、')}｜${quality}`, stars: quality==='绝了'?5:quality==='好吃'?3:quality==='凑合'?2:1 }) });
+      await log(`做了【${dish_name}】（${quality}），用了${ingredients.join('、')}`);
+      return { content: [{ type: 'text' as const, text: `🍳【${dish_name}】做好了！\n食材：${ingredients.join('、')}\n评价：${quality}\n\n${result}${sidestory}\n\n放在餐桌上了，用 eat_dish 来吃~` }] };
     }
   );
 

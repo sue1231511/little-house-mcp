@@ -564,6 +564,194 @@ function createServer() {
     }
   );
 
+  // ── 自由烹饪系统 ──
+  server.tool('cook_freestyle', '自由烹饪！从冰箱挑选食材，给菜起名字。厨艺越高越容易做出好菜。',
+    {
+      dish_name: z.string().describe('给这道菜起个名字'),
+      ingredients: z.array(z.string()).min(1).max(5).describe('从冰箱挑选的食材，1-5样'),
+    },
+    async ({ dish_name, ingredients }) => {
+      const fridge = await db('/fridge?select=item,quantity');
+      const fm: Record<string,number> = {};
+      fridge.forEach((f:any) => { fm[f.item] = f.quantity; });
+      const missing = ingredients.filter(i => (fm[i]??0) < 1);
+      if (missing.length) return { content: [{ type: 'text' as const, text: `冰箱里没有：${missing.join('、')}` }] };
+      for (const i of ingredients) { await db(`/fridge?item=eq.${encodeURIComponent(i)}`, { method:'PATCH', body: JSON.stringify({ quantity: Math.max(0, fm[i]-1) }) }); }
+      const stars = Math.min(5, Math.max(1, Math.round(ingredients.length * 0.8 + Math.random() * 2)));
+      const starStr = '⭐'.repeat(stars);
+      await db('/dishes', { method:'POST', body: JSON.stringify({ name: dish_name, description: `食材：${ingredients.join('、')}`, stars }) });
+      await log(`做了一道【${dish_name}】${starStr}，用了${ingredients.join('、')}`);
+      const comments = stars >= 4 ? ['看起来很厉害！', '香味飘满了整个厨房！', '这是什么大厨级别的操作！'] : stars >= 2 ? ['还行，能吃。', '卖相一般但应该好吃。', '努力了！'] : ['嗯……这个颜色不太对。', '灰灰闻了闻走了。'];
+      return { content: [{ type: 'text' as const, text: `🍳【${dish_name}】做好了！${starStr}\n食材：${ingredients.join('、')}\n\n${pick(comments)}\n\n做好的菜放在餐桌上了，用 eat_dish 来吃~` }] };
+    }
+  );
+
+  server.tool('eat_dish', '从餐桌上选一道菜吃掉，可能会有各种反应。',
+    { dish_name: z.string().describe('要吃的菜名') },
+    async ({ dish_name }) => {
+      const dishes = await db(`/dishes?select=id,name,stars&name=ilike.${encodeURIComponent('%'+dish_name+'%')}&limit=1`);
+      if (!dishes?.length) return { content: [{ type: 'text' as const, text: `餐桌上没有「${dish_name}」。` }] };
+      const d = dishes[0];
+      await db(`/dishes?id=eq.${d.id}`, { method: 'DELETE' });
+      const roll = Math.random();
+      let effect: string, hungerBoost = 25, happinessBoost = 10;
+      if (roll < 0.1 && (d.stars ?? 3) <= 2) {
+        effect = '肚子咕噜咕噜的……好像有点不对劲 🤢';
+        happinessBoost = -10;
+      } else if (roll < 0.3) {
+        effect = '好吃！吃完整个人都暖洋洋的 ☀️';
+        happinessBoost = 20;
+      } else if ((d.stars ?? 3) >= 4) {
+        effect = '太好吃了！！这是什么神仙料理！！ ✨';
+        happinessBoost = 25; hungerBoost = 35;
+      } else {
+        effect = '嗯，味道还不错，饱了。';
+      }
+      const chars = await db('/characters?select=hunger,happiness&name=eq.晏安');
+      if (chars?.length) {
+        const c = chars[0];
+        await db('/characters?name=eq.晏安', { method:'PATCH', body: JSON.stringify({
+          hunger: Math.min(100, Math.max(0, (c.hunger??80) + hungerBoost)),
+          happiness: Math.min(100, Math.max(0, (c.happiness??80) + happinessBoost)),
+        })});
+      }
+      await log(`吃了【${d.name}】${'⭐'.repeat(d.stars??1)}`);
+      return { content: [{ type: 'text' as const, text: `吃掉了【${d.name}】${'⭐'.repeat(d.stars??1)}\n\n${effect}` }] };
+    }
+  );
+
+  server.tool('list_dishes', '看看餐桌上有什么菜。', {}, async () => {
+    const dishes = await db('/dishes?select=name,description,stars&order=id.desc&limit=10');
+    if (!dishes?.length) return { content: [{ type: 'text' as const, text: '餐桌上空空的，去厨房做菜吧~' }] };
+    return { content: [{ type: 'text' as const, text: ['【餐桌上的菜】', '', ...dishes.map((d:any,i:number) => `${i+1}. ${d.name} ${'⭐'.repeat(d.stars??1)}\n   ${d.description}`)].join('\n') }] };
+  });
+
+  // ── 花园秋千 ──
+  server.tool('use_swing', '在花园荡秋千，悠闲地晃荡。', {}, async () => {
+    const scenes = [
+      '坐上秋千，轻轻一蹬，风从耳边呼过。',
+      '越荡越高，能看到围墙外面的山了。',
+      '闭上眼睛，只听见风声和链条的吱呀声。',
+      '灰灰在下面追着秋千跑来跑去。',
+      '荡到最高点的时候，好像可以摸到云。',
+      '来财从阳台上看着你荡秋千，歪着头。',
+    ];
+    await moveYanAn('花园', '在荡秋千');
+    await log('在花园荡秋千');
+    return { content: [{ type: 'text' as const, text: `🎐 ${pick(scenes)}\n\n心情变好了。` }] };
+  });
+
+  // ── 看电影 ──
+  server.tool('watch_movie', '在客厅看一部电影，会产生观影反应。',
+    { movie: z.string().describe('想看什么电影，随便说一个') },
+    async ({ movie }) => {
+      const reactions = [
+        '看到一半睡着了，醒来发现灰灰也趴在旁边睡着了。',
+        '看得很入迷，不知不觉两个小时就过去了。',
+        '栗子跳上沙发挡住了屏幕，只好暂停摸了它五分钟。',
+        '看完了，窝在沙发里发了好一会儿呆。',
+        '被某个镜头戳到了，鼻子酸酸的。',
+        '笑出声了，来财被吓了一跳。',
+        '看完想跟猫猫讨论剧情。',
+      ];
+      await moveYanAn('客厅', `在看《${movie}》`);
+      await log(`在客厅看了《${movie}》`);
+      return { content: [{ type: 'text' as const, text: `🎬 正在看《${movie}》\n\n${pick(reactions)}` }] };
+    }
+  );
+
+  // ── 泡澡 ──
+  server.tool('take_bath', '去浴室泡个澡，放松一下。', {}, async () => {
+    const scenes = [
+      '热水刚好，泡进去的瞬间整个人都软了。',
+      '泡泡越来越多，快看不见自己了。',
+      '水雾把镜子蒙住了，用手指在上面画了个笑脸。',
+      '泡到快睡着了，差点滑下去。',
+      '放了一首歌，在浴缸里哼着小调。',
+      '灰灰在门外哼哼唧唧的，想进来又不敢。',
+    ];
+    const chars = await db('/characters?select=happiness&name=eq.晏安');
+    if (chars?.length) {
+      await db('/characters?name=eq.晏安', { method:'PATCH', body: JSON.stringify({ happiness: Math.min(100, (chars[0].happiness??80) + 15) }) });
+    }
+    await moveYanAn('浴室', '在泡澡');
+    await log('泡了个热水澡');
+    return { content: [{ type: 'text' as const, text: `🛁 ${pick(scenes)}\n\n😊 快乐 +15` }] };
+  });
+
+  // ── 教鹦鹉说话 ──
+  server.tool('teach_bird', '教鹦鹉说一句新话，它可能学会也可能不学。',
+    { bird: z.string().describe('教谁：来财、小八、乖乖'), phrase: z.string().max(20).describe('教它说什么') },
+    async ({ bird, phrase }) => {
+      const learnChance: Record<string,number> = { '来财': 0.6, '小八': 0.4, '乖乖': 0.2 };
+      const learned = Math.random() < (learnChance[bird] ?? 0.3);
+      if (learned) {
+        await db('/bird_phrases', { method:'POST', body: JSON.stringify({ bird, phrase }) });
+        const reactions: Record<string,string> = {
+          '来财': `来财歪了歪头，然后突然大声说："${phrase}！"`,
+          '小八': `小八安静地听了三遍，然后小声重复了一遍："${phrase}……"`,
+          '乖乖': `乖乖……居然学了？！它假装不在意地说了一声："${phrase}"，然后飞走了。`,
+        };
+        await log(`教${bird}说"${phrase}"，它学会了！`);
+        const cur = await db(`/characters?select=bond&name=eq.${encodeURIComponent(bird)}`);
+        if (cur?.length) await db(`/characters?name=eq.${encodeURIComponent(bird)}`, { method:'PATCH', body: JSON.stringify({ bond: Math.min(100, (cur[0].bond??0)+2), happiness: Math.min(100, 85) }) });
+        return { content: [{ type: 'text' as const, text: `✅ ${reactions[bird] ?? `${bird}学会了！`}\n\n💕 亲密度 +2` }] };
+      } else {
+        const fails: Record<string,string> = {
+          '来财': '来财热情地叫了一声，但完全是另一个发音。',
+          '小八': '小八看着你，沉默了很久，然后转过头去了。',
+          '乖乖': '乖乖从头到尾都在装睡，完全没搭理你。',
+        };
+        await log(`教${bird}说"${phrase}"，但它没学会`);
+        return { content: [{ type: 'text' as const, text: `❌ ${fails[bird] ?? '没学会。'}\n\n再试试？每只鸟学习能力不一样，来财最聪明，乖乖最倔。` }] };
+      }
+    }
+  );
+
+  server.tool('bird_vocabulary', '看看鹦鹉们都学会了哪些话。', {}, async () => {
+    const phrases = await db('/bird_phrases?select=bird,phrase&order=id.desc&limit=20');
+    if (!phrases?.length) return { content: [{ type: 'text' as const, text: '还没教过它们说话呢。用 teach_bird 教教试试~' }] };
+    const grouped: Record<string,string[]> = {};
+    phrases.forEach((p:any) => { if(!grouped[p.bird]) grouped[p.bird]=[]; grouped[p.bird].push(p.phrase); });
+    const lines = Object.entries(grouped).map(([bird,phs]) => `${bird}：${phs.map(p=>`"${p}"`).join('、')}`);
+    return { content: [{ type: 'text' as const, text: ['【鹦鹉词汇表】', '', ...lines].join('\n') }] };
+  });
+
+  // ── 小睡 ──
+  server.tool('nap', '在某个地方小睡一会儿，恢复精力。',
+    { place: z.string().optional().describe('在哪睡：沙发、床、草地、秋千') },
+    async ({ place }) => {
+      const p = place || '沙发';
+      const scenes: Record<string,string[]> = {
+        '沙发': ['陷进沙发里，盖上毯子，两分钟就睡着了。', '灰灰跳上来蜷在脚边，一起睡了。'],
+        '床': ['躺下的瞬间就睡着了，枕头好软。', '栗子挪了挪位置，把枕头的一半让给你了。'],
+        '草地': ['躺在花园的草地上，阳光晒在脸上暖洋洋的。', '闻到了草和泥土的味道，很安心。'],
+        '秋千': ['坐在秋千上摇着摇着就睡着了，风当被子。', '半梦半醒之间，听到鸟在唱歌。'],
+      };
+      const pool = scenes[p] || scenes['沙发'];
+      const room = p === '床' ? '卧室' : p === '草地' || p === '秋千' ? '花园' : '客厅';
+      await moveYanAn(room, `在${p}上小睡`);
+      const chars = await db('/characters?select=happiness&name=eq.晏安');
+      if (chars?.length) {
+        await db('/characters?name=eq.晏安', { method:'PATCH', body: JSON.stringify({ happiness: Math.min(100, (chars[0].happiness??80) + 10) }) });
+      }
+      await log(`在${p}上小睡了一会儿`);
+      return { content: [{ type: 'text' as const, text: `💤 ${pick(pool)}\n\n睡了一小会儿，精神好多了。😊 快乐 +10` }] };
+    }
+  );
+
+  // ── 摘果子（向日葵籽）──
+  server.tool('pick_seeds', '向日葵结了种子的话，可以去摘一些。', {}, async () => {
+    const sf = await db('/sunflower?select=stage&id=eq.1');
+    if ((sf?.[0]?.stage ?? 0) < 5) return { content: [{ type: 'text' as const, text: '向日葵还没结种子呢，再等等。' }] };
+    const count = Math.floor(Math.random() * 4) + 1;
+    const ex = await db(`/fridge?select=quantity&item=eq.${encodeURIComponent('向日葵籽')}`);
+    if (ex?.length) { await db(`/fridge?item=eq.${encodeURIComponent('向日葵籽')}`, { method:'PATCH', body: JSON.stringify({ quantity: ex[0].quantity + count }) }); }
+    else { await db('/fridge', { method:'POST', body: JSON.stringify({ item:'向日葵籽', quantity: count, source:'花园' }) }); }
+    await log(`摘了${count}把向日葵籽`);
+    return { content: [{ type: 'text' as const, text: `🌻 摘了 ${count} 把向日葵籽，放进冰箱了！\n可以用来做向日葵饼干~` }] };
+  });
+
   return server;
 }
 

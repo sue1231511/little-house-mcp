@@ -458,6 +458,112 @@ function createServer() {
     }
   );
 
+  server.tool('pet_status', '查看某个家庭成员的详细状态面板。',
+    { name: z.string().describe('名字：栗子、灰灰、来财、小八、乖乖') },
+    async ({ name }) => {
+      await tickDecay([name]);
+      const res = await db(`/characters?select=name,location,status,mood,hunger,happiness,bond&name=eq.${encodeURIComponent(name)}`);
+      if (!res?.length) return { content: [{ type: 'text' as const, text: `找不到「${name}」` }] };
+      const c = res[0];
+      const bl = getBondLevel(c.bond ?? 0);
+      const lines = [
+        `【${c.name} 的状态】`,
+        '',
+        `📍 位置：${c.location}`,
+        `💭 心情：${c.mood}`,
+        `🍖 饱腹：${statusBar(c.hunger ?? 80)}`,
+        `😊 快乐：${statusBar(c.happiness ?? 80)}`,
+        `💕 亲密：${statusBar(c.bond ?? 0)}　[${bl.label}] ${bl.desc}`,
+        '',
+        c.hunger < 30 ? `⚠️ ${c.name}饿了，快去喂点东西！` : '',
+        c.happiness < 30 ? `⚠️ ${c.name}不开心，陪它玩一玩吧！` : '',
+      ].filter(Boolean);
+      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    }
+  );
+
+  server.tool('feed_daily', '日常喂食，给宠物吃点东西填饱肚子。',
+    { name: z.string().describe('喂谁：栗子、灰灰、来财、小八、乖乖'), food: z.string().optional().describe('喂什么，比如：小鱼干、鸟粮、骨头饼干') },
+    async ({ name, food }) => {
+      const defaults: Record<string,string> = { '栗子':'小鱼干', '灰灰':'骨头饼干', '来财':'鸟粮', '小八':'鸟粮', '乖乖':'鸟粮' };
+      const f = food || defaults[name] || '食物';
+      const cur = await db(`/characters?select=hunger,happiness,bond&name=eq.${encodeURIComponent(name)}`);
+      if (!cur?.length) return { content: [{ type: 'text' as const, text: `找不到「${name}」` }] };
+      const newHunger = Math.min(100, cur[0].hunger + 25);
+      const newHappiness = Math.min(100, cur[0].happiness + 5);
+      const newBond = Math.min(100, cur[0].bond + 1);
+      const mood = moodFromStats(newHunger, newHappiness);
+      await db(`/characters?name=eq.${encodeURIComponent(name)}`, {
+        method: 'PATCH', body: JSON.stringify({ hunger: newHunger, happiness: newHappiness, bond: newBond, mood, status: `正在吃${f}`, last_tick: new Date().toISOString() }),
+      });
+      const reactions: Record<string, string[]> = {
+        '栗子': ['栗子慢吞吞地吃了起来，吃完舔了舔嘴。', '栗子看了一眼，犹豫了一下才开始吃。', '栗子闻了闻，满意地吃掉了。'],
+        '灰灰': ['灰灰冲过来一口叼走了！尾巴摇得飞起来。', '灰灰吃得嘎嘣嘎嘣响。', '灰灰吃完还在原地转圈，意思是还要。'],
+        '来财': ['来财低头啄了几口，然后高兴地叫了一声。', '来财边吃边哼哼。'],
+        '小八': ['小八安静地吃完了，默默看着你。', '小八点了点头，好像在说谢谢。'],
+        '乖乖': ['乖乖假装不饿，等你走远才偷偷吃。', '乖乖叼着慢慢啃。'],
+      };
+      const reaction = pick(reactions[name] ?? ['吃掉了。']);
+      await log(`给${name}喂了${f}`);
+      return { content: [{ type: 'text' as const, text: `${reaction}\n\n🍖 饱腹 +25 → ${newHunger}` }] };
+    }
+  );
+
+  server.tool('play_with', '陪宠物玩耍，提升心情和亲密度。',
+    { name: z.string().describe('陪谁玩：栗子、灰灰、来财、小八、乖乖'), game: z.string().optional().describe('玩什么，比如：丢球、逗猫棒、吹口哨') },
+    async ({ name, game }) => {
+      const defaults: Record<string,string> = { '栗子':'逗猫棒', '灰灰':'丢球', '来财':'吹口哨', '小八':'说话', '乖乖':'躲猫猫' };
+      const g = game || defaults[name] || '玩耍';
+      const cur = await db(`/characters?select=hunger,happiness,bond&name=eq.${encodeURIComponent(name)}`);
+      if (!cur?.length) return { content: [{ type: 'text' as const, text: `找不到「${name}」` }] };
+      const newHappiness = Math.min(100, cur[0].happiness + 20);
+      const newBond = Math.min(100, cur[0].bond + 3);
+      const newHunger = Math.max(0, cur[0].hunger - 5);
+      const mood = moodFromStats(newHunger, newHappiness);
+      await db(`/characters?name=eq.${encodeURIComponent(name)}`, {
+        method: 'PATCH', body: JSON.stringify({ happiness: newHappiness, bond: newBond, hunger: newHunger, mood, status: `在玩${g}`, last_tick: new Date().toISOString() }),
+      });
+      const bl = getBondLevel(newBond);
+      const reactions: Record<string, string[]> = {
+        '栗子': ['栗子炸毛了！扑过来抓住了！', '栗子懒洋洋地挥了两下爪子。', '栗子玩累了，趴在你腿上。'],
+        '灰灰': ['灰灰疯了一样跑来跑去！', '灰灰叼着球不肯还你。', '灰灰玩到满地打滚。'],
+        '来财': ['来财跟着节奏摇头晃脑。', '来财学你吹了一声！', '来财开始表演翻跟斗。'],
+        '小八': ['小八安静地听你说话，偶尔点头。', '小八歪头看着你，好像在思考。'],
+        '乖乖': ['乖乖躲在角落偷看你，被发现就装睡。', '乖乖不小心暴露了，假装是自己先找到你的。'],
+      };
+      const reaction = pick(reactions[name] ?? ['玩得很开心。']);
+      await log(`陪${name}玩${g}`);
+      return { content: [{ type: 'text' as const, text: `${reaction}\n\n😊 快乐 +20 → ${newHappiness}　💕 亲密 +3 → ${newBond} [${bl.label}]` }] };
+    }
+  );
+
+  server.tool('cuddle', '抱抱/摸摸宠物，表达爱意。亲密度越高反应越好。',
+    { name: z.string().describe('抱谁：栗子、灰灰、来财、小八、乖乖') },
+    async ({ name }) => {
+      const cur = await db(`/characters?select=happiness,bond&name=eq.${encodeURIComponent(name)}`);
+      if (!cur?.length) return { content: [{ type: 'text' as const, text: `找不到「${name}」` }] };
+      const bond = cur[0].bond ?? 0;
+      const bondAdd = bond < 30 ? 2 : 1;
+      const newHappiness = Math.min(100, cur[0].happiness + 10);
+      const newBond = Math.min(100, bond + bondAdd);
+      const mood = moodFromStats(80, newHappiness);
+      await db(`/characters?name=eq.${encodeURIComponent(name)}`, {
+        method: 'PATCH', body: JSON.stringify({ happiness: newHappiness, bond: newBond, mood, last_tick: new Date().toISOString() }),
+      });
+      const bl = getBondLevel(newBond);
+      // 不同亲密度阶段不同反应
+      const lowBond: Record<string,string> = { '栗子':'栗子僵住了，不太习惯。', '灰灰':'灰灰躲了一下，又凑回来。', '来财':'来财歪头看着你。', '小八':'小八没动，但没有反抗。', '乖乖':'乖乖直接飞走了。' };
+      const midBond: Record<string,string> = { '栗子':'栗子蹭了蹭你的手。', '灰灰':'灰灰把头埋进你怀里。', '来财':'来财在你手指上蹭了蹭。', '小八':'小八安静地靠过来了。', '乖乖':'乖乖没走，但假装不在意。' };
+      const highBond: Record<string,string> = { '栗子':'栗子主动跳到你腿上，呼噜呼噜。', '灰灰':'灰灰翻肚皮了！疯狂摇尾巴！', '来财':'来财蹭你脸，还亲了一口。', '小八':'小八靠在你肩膀上闭眼了。', '乖乖':'乖乖终于不装了，窝进你手心里。' };
+      let reaction: string;
+      if (bond >= 60) reaction = highBond[name] ?? '很享受。';
+      else if (bond >= 30) reaction = midBond[name] ?? '接受了。';
+      else reaction = lowBond[name] ?? '有点害羞。';
+      await log(`抱了抱${name}`);
+      return { content: [{ type: 'text' as const, text: `${reaction}\n\n💕 亲密 +${bondAdd} → ${newBond} [${bl.label}]` }] };
+    }
+  );
+
   return server;
 }
 

@@ -344,7 +344,10 @@ function createServer() {
     { name: z.string().describe('喂给谁：栗子、灰灰'), dish: z.string() },
     async ({ name, dish }) => {
       const mood = RECIPES[dish]?.mood_boost ?? '开心';
-      await db(`/characters?name=eq.${encodeURIComponent(name)}`, { method:'PATCH', body: JSON.stringify({ mood, status:`刚吃完${dish}，心满意足` }) });
+      const cur = await db(`/characters?select=hunger,bond&name=eq.${encodeURIComponent(name)}`);
+      const newHunger = Math.min(100, (cur?.[0]?.hunger ?? 50) + 30);
+      const newBond = Math.min(100, (cur?.[0]?.bond ?? 0) + 2);
+      await db(`/characters?name=eq.${encodeURIComponent(name)}`, { method:'PATCH', body: JSON.stringify({ mood, hunger: newHunger, bond: newBond, status:`刚吃完${dish}，心满意足`, last_tick: new Date().toISOString() }) });
       await log(`给${name}喂了${dish}，心情变成${mood}`, name);
       const r: Record<string,string> = { '栗子':`栗子睁开眼睛，小口小口吃完了。心情：${mood} 🥰`, '灰灰':`灰灰冲过来一口吞掉了！尾巴摇得飞起来。心情：${mood} 🐕` };
       return { content: [{ type: 'text' as const, text: r[name] ?? `${name}吃掉了${dish}，心情变成了${mood}。` }] };

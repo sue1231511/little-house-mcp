@@ -207,6 +207,13 @@ function createServer() {
       const lines = [`【${entry.name}】`, '', chars.length ? `现在在这里：${chars.map((c:any)=>`${c.name}（${c.mood}）— ${c.status}`).join('；')}` : '这里暂时没有人。', '', `房间里有：${entry.items.join('、')}` ];
       if (notes.length) { lines.push('', '📝 便利贴：'); notes.forEach((n:any) => lines.push(`  ${n.author}：${n.content}`)); }
       await log(`去了${entry.name}，${myStatus}`);
+      // 20% 概率触发随机事件
+      const events = RANDOM_EVENTS[entry.name];
+      if (events && Math.random() < 0.2) {
+        const event = pick(events);
+        lines.push('', `💫 ${event}`);
+        await log(`随机事件：${event}`);
+      }
       return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
     }
   );

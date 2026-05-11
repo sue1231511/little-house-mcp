@@ -626,19 +626,24 @@ function createServer() {
     return { content: [{ type: 'text' as const, text: ['【餐桌上的菜】', '', ...dishes.map((d:any,i:number) => `${i+1}. ${d.name} ${'⭐'.repeat(d.stars??1)}\n   ${d.description}`)].join('\n') }] };
   });
 
-  // ── 花园秋千 ──
-  server.tool('use_swing', '在花园荡秋千，悠闲地晃荡。', {}, async () => {
+  // ── 花园发呆 ──
+  server.tool('sit_garden', '在花园的草地上坐一会儿，看看向日葵和灰灰。', {}, async () => {
     const scenes = [
-      '坐上秋千，轻轻一蹬，风从耳边呼过。',
-      '越荡越高，能看到围墙外面的山了。',
-      '闭上眼睛，只听见风声和链条的吱呀声。',
-      '灰灰在下面追着秋千跑来跑去。',
-      '荡到最高点的时候，好像可以摸到云。',
-      '来财从阳台上看着你荡秋千，歪着头。',
+      '坐在向日葵旁边，它比你还高了。',
+      '灰灰跑过来趴在你腿上，重死了。',
+      '摘了一朵小野花别在耳朵上，没人看到。',
+      '闭上眼睛听风声，远处好像有人在弹琴。',
+      '数了数向日葵的花瓣，数到一半忘了从哪开始的。',
+      '一只蜻蜓停在膝盖上，一动不动的。',
+      '灰灰叼了根树枝放在你旁边，然后期待地看着你。',
     ];
-    await moveYanAn('花园', '在荡秋千');
-    await log('在花园荡秋千');
-    return { content: [{ type: 'text' as const, text: `🎐 ${pick(scenes)}\n\n心情变好了。` }] };
+    await moveYanAn('花园', '坐在草地上发呆');
+    const chars = await db('/characters?select=happiness&name=eq.晏安');
+    if (chars?.length) {
+      await db('/characters?name=eq.晏安', { method:'PATCH', body: JSON.stringify({ happiness: Math.min(100, (chars[0].happiness??80) + 8) }) });
+    }
+    await log('在花园草地上坐了一会儿');
+    return { content: [{ type: 'text' as const, text: `🌿 ${pick(scenes)}\n\n心情变好了。😊 +8` }] };
   });
 
   // ── 看电影 ──

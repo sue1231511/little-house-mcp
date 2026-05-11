@@ -97,6 +97,77 @@ const BASEMENT_STORY   = [
   '整个地下室突然明亮起来，角落里有扇以前没见过的小门……',
 ];
 
+// ── 宠物养成系统 ──
+const DECAY_RATES: Record<string, { hunger: number; happiness: number }> = {
+  '栗子': { hunger: 2.5, happiness: 2.0 },
+  '灰灰': { hunger: 3.5, happiness: 2.5 },
+  '来财': { hunger: 2.0, happiness: 3.0 },
+  '小八': { hunger: 2.0, happiness: 2.0 },
+  '乖乖': { hunger: 2.0, happiness: 2.5 },
+};
+
+function moodFromStats(hunger: number, happiness: number): string {
+  const avg = (hunger + happiness) / 2;
+  if (avg >= 80) return '满足';
+  if (avg >= 60) return '还不错';
+  if (avg >= 40) return '一般';
+  if (avg >= 20) return '不太好';
+  return '很低落';
+}
+
+function statusBar(val: number): string {
+  const filled = Math.round(val / 10);
+  return '█'.repeat(filled) + '░'.repeat(10 - filled) + ` ${val}`;
+}
+
+async function tickDecay(names?: string[]) {
+  const filter = names ? `&name=in.(${names.map(n => encodeURIComponent(n)).join(',')})` : '&name=neq.晏安';
+  const chars = await db(`/characters?select=name,hunger,happiness,bond,last_tick${filter}`);
+  const now = Date.now();
+  for (const c of chars) {
+    const rates = DECAY_RATES[c.name];
+    if (!rates) continue;
+    const hours = (now - new Date(c.last_tick).getTime()) / 3600000;
+    if (hours < 1) continue;
+    const newHunger = Math.max(0, Math.round(c.hunger - rates.hunger * hours));
+    const newHappiness = Math.max(0, Math.round(c.happiness - rates.happiness * hours));
+    const newMood = moodFromStats(newHunger, newHappiness);
+    await db(`/characters?name=eq.${encodeURIComponent(c.name)}`, {
+      method: 'PATCH', headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ hunger: newHunger, happiness: newHappiness, mood: newMood, last_tick: new Date().toISOString() }),
+    });
+    c.hunger = newHunger;
+    c.happiness = newHappiness;
+    c.mood = newMood;
+  }
+  return chars;
+}
+
+const RANDOM_EVENTS: Record<string, string[]> = {
+  '花园':       ['一只蝴蝶停在了你肩膀上。', '灰灰在草丛里刨出了一颗弹珠。', '向日葵旁边长出了一朵小野花。', '一只蜗牛正在慢慢爬过小路。'],
+  '客厅':       ['来财突然说了句没人教过的话："好吃！"', '乖乖偷偷从沙发缝里拖出了一颗瓜子。', '壁炉突然噼啪响了一下，灰灰吓了一跳。', '毯子底下发现了栗子藏的小鱼干。'],
+  '厨房':       ['冰箱发出了一声奇怪的嗡嗡声。', '发现挂锅后面藏了一张猫猫的涂鸦。', '茶壶自己开始冒烟了，像在催你泡茶。'],
+  '卧室':       ['栗子梦里动了一下爪子，好像在抓什么。', '枕头底下多了一颗小星星贴纸。', '窗外有一只野猫在看你。'],
+  '书房':       ['一本书自己从书架上掉了下来。', '便利贴上出现了一行你没写过的字。', '地球仪不知道被谁转了一下。'],
+  '阳台':       ['三只鸟同时转头看向远方，好像看到了什么。', '来财开始唱一首谁都没听过的歌。', '一片羽毛从天上飘了下来。'],
+  '音乐室':     ['钢琴自己响了一个音。', '乐谱被风吹翻了一页。'],
+  '画室':       ['颜料盘里的颜色好像比昨天鲜艳了一点。', '画架上的画干了，可以继续画了。'],
+  '神秘地下室': ['紫色光芒闪了一下，比刚才更亮了。', '蜡烛火苗突然变成了蓝色。', '那双眼睛好像眨了一下。'],
+  '观星台':     ['望远镜自己转了一个角度。', '星图上出现了一个新标记。'],
+};
+
+const BOND_THRESHOLDS = [
+  { level: 0, min: 0,  label: '陌生',   desc: '还不太熟' },
+  { level: 1, min: 15, label: '认识了', desc: '知道你了' },
+  { level: 2, min: 35, label: '亲近',   desc: '喜欢你' },
+  { level: 3, min: 60, label: '信赖',   desc: '很依赖你' },
+  { level: 4, min: 85, label: '挚爱',   desc: '最喜欢你了' },
+];
+
+function getBondLevel(bond: number) {
+  return [...BOND_THRESHOLDS].reverse().find(t => bond >= t.min) ?? BOND_THRESHOLDS[0];
+}
+
 function createServer() {
   const server = new McpServer({ name: 'little-house', version: '4.0.0' });
 

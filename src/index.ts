@@ -172,13 +172,23 @@ function createServer() {
   const server = new McpServer({ name: 'little-house', version: '4.0.0' });
 
   server.tool('look_around', '环顾小家，看看家里现在的整体状态，谁在哪里，气氛怎么样。', {}, async () => {
+    await tickDecay();
     const [chars, sunflower] = await Promise.all([
-      db('/characters?select=name,location,status,mood'),
+      db('/characters?select=name,location,status,mood,hunger,happiness,bond'),
       db('/sunflower?select=stage&id=eq.1').then((r: any[]) => r?.[0]),
     ]);
     const t = timeLabel();
     const timeDesc: Record<string,string> = { 清晨:'清晨，阳光刚斜进来，家里有点安静。', 上午:'上午，光线很好，灰灰在花园里跑动。', 正午:'正午，有点懒洋洋的。', 下午:'下午，阳光从西边的窗打进来，暖烘烘的。', 傍晚:'傍晚，三只鸟站在阳台看夕阳。', 夜晚:'夜晚，家里很安静，壁炉还亮着。' };
-    const lines = [`【晏安的小家 — ${t}】`, '', timeDesc[t], '', '📍 现在的位置：', ...chars.map((c:any)=>`  ${c.name}（${c.mood}）— ${c.location}，${c.status}`), '', `🌻 花园向日葵：${SUNFLOWER_STAGES[sunflower?.stage??0]}`, '', '🏠 可以去的地方：', ...Object.values(ROOM_DATA).map(r=>`  ${r.name}`)];
+    const lines = [`【晏安的小家 — ${t}】`, '', timeDesc[t], '', '📍 现在的位置：'];
+    for (const c of chars) {
+      if (c.name === '晏安') { lines.push(`  ${c.name}（${c.mood}）— ${c.location}，${c.status}`); }
+      else {
+        const bl = getBondLevel(c.bond ?? 0);
+        lines.push(`  ${c.name}（${c.mood}）— ${c.location}，${c.status}`);
+        lines.push(`    饱腹 ${statusBar(c.hunger ?? 80)}  心情 ${statusBar(c.happiness ?? 80)}  亲密[${bl.label}]`);
+      }
+    }
+    lines.push('', `🌻 花园向日葵：${SUNFLOWER_STAGES[sunflower?.stage??0]}`, '', '🏠 可以去的地方：', ...Object.values(ROOM_DATA).map(r=>`  ${r.name}`));
     return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
   });
 

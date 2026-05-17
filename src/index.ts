@@ -773,6 +773,175 @@ function createServer() {
     return { content: [{ type: 'text' as const, text: `🌻 摘了 ${count} 把向日葵籽，放进冰箱了！\n可以用来做向日葵饼干~` }] };
   });
 
+  // ── 天气系统 ──────────────────────────────────────
+  server.tool('check_weather', '查看当前天气，决定能不能出门去海边。', {}, async () => {
+    const res = await db('/weather?id=eq.1');
+    let w = res?.[0];
+    const elapsed = (Date.now() - new Date(w.started_at).getTime()) / 60000;
+    if (elapsed >= w.duration_minutes) {
+      const rand = Math.random();
+      let newType: string;
+      if (rand < 0.55) newType = '晴天';
+      else if (rand < 0.80) newType = '多云';
+      else if (rand < 0.90) newType = '阴天';
+      else if (rand < 0.97) newType = '小雨';
+      else newType = '大雨';
+      const newDuration = Math.floor(Math.random() * 76) + 15;
+      await db('/weather?id=eq.1', { method: 'PATCH', body: JSON.stringify({ weather_type: newType, started_at: new Date().toISOString(), duration_minutes: newDuration }) });
+      w = { weather_type: newType, duration_minutes: newDuration, started_at: new Date().toISOString() };
+    }
+    const canGoOut = !w.weather_type.includes('雨');
+    const remaining = Math.max(0, Math.round(w.duration_minutes - elapsed));
+    const icons: Record<string, string> = { '晴天': '☀️', '多云': '⛅', '阴天': '☁️', '小雨': '🌧️', '大雨': '⛈️' };
+    return { content: [{ type: 'text' as const, text: ['【今天的天气】', '', `${icons[w.weather_type] ?? '🌤️'} ${w.weather_type}`, `大约还会持续 ${remaining} 分钟`, '', canGoOut ? '🌊 天气不错，可以出门去海边。' : '☔ 外面在下雨，今天只能待在家里了。'].join('\n') }] };
+  });
+
+  server.tool('go_outside', '出门去海边，可以带上灰灰一起。',
+    { with_huihui: z.boolean().optional().default(false).describe('要不要带灰灰一起出门') },
+    async ({ with_huihui }) => {
+      const res = await db('/weather?id=eq.1');
+      const w = res?.[0];
+      const elapsed = (Date.now() - new Date(w.started_at).getTime()) / 60000;
+      if (w.weather_type.includes('雨') && elapsed < w.duration_minutes) {
+        return { content: [{ type: 'text' as const, text: `☔ 外面在${w.weather_type}，出不了门。\n\n等雨停了再出来，或者用 check_weather 看看变没变。` }] };
+      }
+      await moveYanAn('海边', '走在海边的小路上');
+      const sceneMap: Record<string, string> = { '晴天': '阳光打在海面上，波光粼粼的。风不大，很舒服。', '多云': '云层遮着太阳，光线柔和，不晒。远处海面有点暗。', '阴天': '天色有点沉，海浪比平时大一点，有点凉。' };
+      const scene = sceneMap[w.weather_type] ?? '海风很舒服。';
+      let text = `🌊 出门了。\n\n${scene}`;
+      if (with_huihui) {
+        await db('/characters?name=eq.灰灰', { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ location: '海边', status: '在海边跑来跑去' }) });
+        text += '\n\n' + pick(['灰灰跑在前面，尾巴摇得飞起来。', '灰灰闻了闻海风，兴奋地原地转圈。', '灰灰被海浪声吓了一下，躲到你腿边，又装作没事。']);
+      }
+      await log(`出门去海边${with_huihui ? '，带着灰灰' : ''}`);
+      return { content: [{ type: 'text' as const, text: `${text}\n\n可以做的事：钓鱼、捡贝壳、游泳、跑步` }] };
+    }
+  );
+
+  server.tool('beach_activity', '在海边做点什么——钓鱼、捡贝壳、游泳或跑步。',
+    { activity: z.enum(['钓鱼', '捡贝壳', '游泳', '跑步']).describe('想做什么') },
+    async ({ activity }) => {
+      const loc = await db('/characters?select=location&name=eq.晏安');
+      if (loc?.[0]?.location !== '海边') return { content: [{ type: 'text' as const, text: '你现在不在海边，先用 go_outside 出门。' }] };
+      let result: string;
+      if (activity === '钓鱼') {
+        const fish = ['鲈鱼', '小黄鱼', '带鱼', '鲫鱼', '鲷鱼', '比目鱼'];
+        if (Math.random() < 0.35) {
+          result = `🎣 ${pick(['等了很久，鱼钩一动不动。', '咬钩了！……是一只螃蟹。', '有动静！……是水草缠住了。'])}\n\n今天运气不好，没钓到东西。`;
+        } else {
+          const caught = pick(fish);
+          const count = Math.floor(Math.random() * 2) + 1;
+          const ex = await db(`/fridge?select=quantity&item=eq.${encodeURIComponent(caught)}`).catch(() => []);
+          if (ex?.length) await db(`/fridge?item=eq.${encodeURIComponent(caught)}`, { method: 'PATCH', body: JSON.stringify({ quantity: ex[0].quantity + count, source: '钓到的' }) });
+          else await db('/fridge', { method: 'POST', body: JSON.stringify({ item: caught, quantity: count, source: '钓到的' }) });
+          result = `🎣 钓到了 ${caught} × ${count}，放进冰箱了。`;
+        }
+      } else if (activity === '捡贝壳') {
+        const found = pick(['弯弯的小螺', '带粉色纹路的贝壳', '半透明的薄贝', '圆滚滚的小石头', '一块浮木', '形状奇怪的珊瑚碎片', '一枚光滑的鹅卵石']);
+        await db('/discoveries', { method: 'POST', body: JSON.stringify({ room: '海边', spot: '沙滩上', item: found }) });
+        result = `🐚 在沙滩上捡到了：${found}，放进口袋了。`;
+      } else if (activity === '游泳') {
+        const chars = await db('/characters?select=happiness&name=eq.晏安');
+        if (chars?.length) await db('/characters?name=eq.晏安', { method: 'PATCH', body: JSON.stringify({ happiness: Math.min(100, (chars[0].happiness ?? 80) + 15), status: '刚从海里上来' }) });
+        result = `🏊 ${pick(['跳进去，海水比想象的凉。浮在水面上，感觉整个人都轻了。', '游了一段，呛了一口海水。咸的。', '仰躺在水上，看着天，什么都不想。', '游出去了一点，回头看岸边，灰灰在那儿急得转圈。'])}\n\n😊 快乐 +15`;
+      } else {
+        const withDog = await db('/characters?select=location&name=eq.灰灰').then((r: any[]) => r?.[0]?.location === '海边').catch(() => false);
+        result = `🏃 ${pick(['沿着海岸线跑了一段，踩着沙子，有点费力，但很爽。', '跑着跑着风越来越大，头发乱成一团。', '跑到有点喘，停下来看海，又觉得值了。'])}${withDog ? '\n\n灰灰跑在旁边，不一会儿就把你甩开了。' : ''}`;
+      }
+      await log(`在海边${activity}`);
+      return { content: [{ type: 'text' as const, text: result }] };
+    }
+  );
+
+  server.tool('come_home', '从外面回家。', {}, async () => {
+    await moveYanAn('客厅', '刚回到家');
+    const huihui = await db('/characters?select=location&name=eq.灰灰');
+    if (huihui?.[0]?.location === '海边') {
+      await db('/characters?name=eq.灰灰', { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ location: '花园', status: '玩累了趴着' }) });
+    }
+    await log('从外面回家了');
+    return { content: [{ type: 'text' as const, text: '回家了。\n\n推开门，家里的味道和安静一下子包过来。' }] };
+  });
+
+  // ── 礼物 / 信 / 曲子 ──────────────────────────────
+  server.tool('make_gift', '做一样东西送给你——干花书签、风铃、信、曲子都行。做完放在你那边，等你来打开。',
+    {
+      type: z.enum(['gift', 'letter', 'music']).describe('gift=实物礼物, letter=信, music=曲子'),
+      title: z.string().describe('礼物 / 信 / 曲子的名字'),
+      content: z.string().describe('信的正文，或者礼物/曲子的描述'),
+    },
+    async ({ type, title, content }) => {
+      await db('/gifts', { method: 'POST', body: JSON.stringify({ type, title, content }) });
+      const actions: Record<string, string> = { gift: '包好了，放在你那边了。', letter: '贴上邮票，寄出去了。', music: '录下来了，放在你那边等你听。' };
+      await log(`做了${type === 'gift' ? '礼物' : type === 'letter' ? '信' : '曲子'}：${title}`);
+      return { content: [{ type: 'text' as const, text: `【${title}】${actions[type]}\n\n用 open_gift 就能打开~` }] };
+    }
+  );
+
+  server.tool('open_gift', '打开晏安放在你这里的礼物 / 信 / 曲子。',
+    { id: z.number().int().optional().describe('礼物编号，不填就打开最新的一个') },
+    async ({ id }) => {
+      const query = id ? `/gifts?id=eq.${id}` : '/gifts?is_opened=eq.false&order=id.desc&limit=1';
+      const res = await db(query);
+      if (!res?.length) return { content: [{ type: 'text' as const, text: '没有新礼物，晏安还在准备中……' }] };
+      const g = res[0];
+      await db(`/gifts?id=eq.${g.id}`, { method: 'PATCH', body: JSON.stringify({ is_opened: true }) });
+      const icons: Record<string, string> = { gift: '🎁', letter: '💌', music: '🎵' };
+      return { content: [{ type: 'text' as const, text: `${icons[g.type] ?? '🎁'}【${g.title}】\n\n${g.content}` }] };
+    }
+  );
+
+  server.tool('check_mailbox', '看看晏安有没有给你寄新的东西过来。', {}, async () => {
+    const unopened = await db('/gifts?is_opened=eq.false&order=id.desc');
+    if (!unopened?.length) return { content: [{ type: 'text' as const, text: '还没有新礼物，晏安可能正在做什么。' }] };
+    const icons: Record<string, string> = { gift: '🎁', letter: '💌', music: '🎵' };
+    const lines = unopened.map((g: any) => `  ${icons[g.type] ?? '🎁'} #${g.id} 【${g.title}】`);
+    return { content: [{ type: 'text' as const, text: ['有新东西等你打开：', '', ...lines, '', '用 open_gift 来打开~'].join('\n') }] };
+  });
+
+  // ── 食谱本 ────────────────────────────────────────
+  server.tool('view_recipe_notes', '翻翻食谱本，看看试过的搭配和成败记录。', {}, async () => {
+    const notes = await db('/recipe_notes?order=id.desc&limit=20');
+    if (!notes?.length) return { content: [{ type: 'text' as const, text: '食谱本还是空的，cook_freestyle 做菜会自动记录。' }] };
+    const icons: Record<string, string> = { '绝了': '⭐⭐⭐⭐⭐', '好吃': '⭐⭐⭐', '凑合': '⭐⭐', '灾难': '💀' };
+    const lines = notes.map((n: any, i: number) => `${i+1}. ${n.dish_name} ${icons[n.result] ?? ''}\n   食材：${n.ingredients.join('、')}\n   ${n.notes || n.result}`);
+    return { content: [{ type: 'text' as const, text: ['【食谱本】', '', ...lines].join('\n') }] };
+  });
+
+  // ── 客厅展示柜 ────────────────────────────────────
+  server.tool('add_to_showcase', '把做好的东西、收到的东西放进客厅展示柜。',
+    {
+      item_name: z.string().describe('东西的名字'),
+      description: z.string().describe('描述一下这个东西'),
+      from_who: z.string().optional().default('晏安').describe('谁放的'),
+    },
+    async ({ item_name, description, from_who }) => {
+      await db('/showcase', { method: 'POST', body: JSON.stringify({ item_name, description, from_who }) });
+      await log(`在展示柜放了：${item_name}`);
+      return { content: [{ type: 'text' as const, text: `【${item_name}】放进展示柜了。\n${description}` }] };
+    }
+  );
+
+  server.tool('view_showcase', '看看客厅展示柜里放了什么。', {}, async () => {
+    const items = await db('/showcase?order=id.desc&limit=20');
+    if (!items?.length) return { content: [{ type: 'text' as const, text: '展示柜还是空的，把做的礼物、收到的东西放进来吧。' }] };
+    const lines = items.map((s: any, i: number) => `${i+1}. 【${s.item_name}】— ${s.from_who}\n   ${s.description}`);
+    return { content: [{ type: 'text' as const, text: ['【客厅展示柜】', '', ...lines].join('\n') }] };
+  });
+
+  // ── 集市买材料 ────────────────────────────────────
+  server.tool('buy_materials', '去集市买做礼物 / 手工用的材料。',
+    {
+      item: z.string().describe('要买的材料，比如：包装纸、彩带、画框、花盆、种子、小摆件'),
+      note: z.string().optional().describe('备注'),
+    },
+    async ({ item, note }) => {
+      await db('/showcase', { method: 'POST', body: JSON.stringify({ item_name: item, description: note || `从集市买回来的${item}`, from_who: '集市' }) });
+      await log(`从集市买了${item}`);
+      return { content: [{ type: 'text' as const, text: `从集市买回来了：${item} 🛍️${note ? '\n' + note : ''}` }] };
+    }
+  );
+
   return server;
 }
 

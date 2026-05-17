@@ -598,6 +598,7 @@ function createServer() {
       ]) : '';
       await db('/dishes', { method:'POST', body: JSON.stringify({ name: dish_name, description: `食材：${ingredients.join('、')}｜${quality}`, stars: quality==='绝了'?5:quality==='好吃'?3:quality==='凑合'?2:1 }) });
       await log(`做了【${dish_name}】（${quality}），用了${ingredients.join('、')}`);
+      await db('/recipe_notes', { method: 'POST', body: JSON.stringify({ dish_name, ingredients, result: quality, notes: result.replace(/\n/g, ' ') }) }).catch(() => {});
       return { content: [{ type: 'text' as const, text: `🍳【${dish_name}】做好了！\n食材：${ingredients.join('、')}\n评价：${quality}\n\n${result}${sidestory}\n\n放在餐桌上了，用 eat_dish 来吃~` }] };
     }
   );
